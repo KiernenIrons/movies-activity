@@ -1,0 +1,11 @@
+# Sample playlist for your Movies Activity
+#
+# Each non-empty line should contain a direct link to a playable media file.
+# Supported formats include MP4, MKV (with supported codecs), and HTTP Live
+# Streaming (HLS) .m3u8 playlists.  You can create these links via
+# Real‑Debrid, or by copying direct links to files you host yourself.
+# Lines beginning with # are ignored.  You can leave empty lines between
+# entries for readability.
+
+https://path/to/your/movie1.mp4
+https://path/to/your/series/episode1.m3u8
