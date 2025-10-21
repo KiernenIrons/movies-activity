@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Movies Activity</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!--
+    Movies Activity
+    =================
+
+    This file implements a self‑contained web app designed to run as a Discord
+    Embedded Activity (sometimes referred to as an “app” or “game”).  It
+    provides a simple video player with playlist management, keyboard
+    shortcuts, an optional password gate and the ability to preload a
+    playlist from a local text file.  It also exposes convenient controls
+    (prev/play/pause/next) and persists the playlist and current index in
+    localStorage so your session survives page refreshes.  When served over
+    HTTPS (for example via GitHub Pages) and registered in the Discord
+    Developer Portal as an embedded application, this page can be launched
+    within any voice channel and will show the video on the activity
+    canvas.
+
+    Password protection
+    -------------------
+    To restrict access to authorised viewers, set the PASSCODE constant
+    below.  When the page loads it will show a full‑screen overlay asking
+    for the passcode.  Only after the correct passcode is entered will the
+    controls and video become visible.  If you do not wish to require a
+    passcode simply set PASSCODE to an empty string.  The passcode is
+    stored in plain text within the HTML file; for private use this is
+    acceptable but do not deploy sensitive secrets here.
+
+    Auto playlist
+    -------------
+    If a file named `movies.txt` is served in the same directory as this
+    HTML file, the app will attempt to fetch it on startup and populate
+    the playlist.  Each line in `movies.txt` should contain a direct media
+    URL (for example an MP4, MKV or HLS .m3u8 link).  Empty lines or
+    comments (lines beginning with `#`) will be ignored.  If `movies.txt`
+    cannot be loaded (because it does not exist or is blocked by CORS) the
+    app falls back to whatever was stored in localStorage.
+
+    Keyboard shortcuts
+    ------------------
+    The following keys are bound globally:
+      Spacebar – toggle play/pause
+      ArrowLeft – play previous item in the playlist
+      ArrowRight – play next item in the playlist
+      ArrowUp – increase volume by 10%
+      ArrowDown – decrease volume by 10%
+
+    Note that keys may be captured by Discord; clicking the canvas and
+    focusing the iframe may be necessary for the shortcuts to work.
+
+    Copyright (c) 2025
+  -->
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+        Arial, sans-serif;
+      background: #0b0b0b;
+      color: #e9e9e9;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      background: #111;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #222;
+      flex-shrink: 0;
+    }
+    header h1 {
+      font-size: 16px;
+      margin: 0;
+      letter-spacing: 0.3px;
+      color: #c9f27c;
+    }
+    .tag {
+      font-size: 11px;
+      opacity: 0.6;
+    }
+    #content {
+      flex: 1;
+      overflow-y: auto;
+      display: none; /* Hidden until passcode accepted */
+    }
+    .wrap {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    video {
+      width: 100%;
+      max-height: 60vh;
+      background: #000;
+      outline: none;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button {
+      background: #1e1e1e;
+      border: 1px solid #2e2e2e;
+      color: #eee;
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2a2a2a;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      background: #111;
+      color: #eee;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    .row > * {
+      flex: 1;
+    }
+    .list {
+      background: #0f0f0f;
+      border: 1px solid #222;
+      border-radius: 12px;
+      padding: 10px;
+      max-height: 28vh;
+      overflow-y: auto;
+    }
+    .item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 4px;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .item:last-child {
+      border-bottom: none;
+    }
+    .item span {
+      font-size: 12px;
+      opacity: 0.9;
+      word-break: break-all;
+    }
+    .overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .overlay input[type="password"] {
+      padding: 12px;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 10px;
+      color: #eee;
+      width: 240px;
+      text-align: center;
+      font-size: 16px;
+    }
+    .overlay .message {
+      margin-bottom: 12px;
+      color: #d2ffa9;
+      text-align: center;
+      font-size: 14px;
+    }
+  </style>
+  <!-- Discord Embedded App SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk/dist/embedded.umd.js"></script>
+  <!-- HLS.js for .m3u8 playback -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+</head>
+<body>
+  <header>
+    <h1>🎬 Movies Activity</h1>
+    <div class="tag" id="dcStatus">connecting…</div>
+  </header>
+  <!-- Main content hidden until passcode entered -->
+  <div id="content">
+    <div class="wrap">
+      <video id="player" controls playsinline></video>
+
+      <div class="controls">
+        <button id="prevBtn">⏮ Prev</button>
+        <button id="playBtn">▶️ Play</button>
+        <button id="pauseBtn">⏸ Pause</button>
+        <button id="nextBtn">⏭ Next</button>
+      </div>
+
+      <div class="row">
+        <input
+          type="text"
+          id="urlInput"
+          placeholder="Paste direct MP4/MKV (with proper codecs) or HLS .m3u8 URL here…"
+        />
+        <button id="addBtn">Add</button>
+        <button id="clearBtn">Clear</button>
+      </div>
+
+      <div class="list" id="playlist"></div>
+    </div>
+  </div>
+
+  <!-- Passcode overlay (can be removed by setting PASSCODE empty) -->
+  <div class="overlay" id="passOverlay">
+    <div class="message">Enter passcode to access your cinema</div>
+    <input type="password" id="passInput" autocomplete="off" />
+  </div>
+
+  <script>
+    (() => {
+      /**
+       * Configuration constants.
+       * PASSCODE: set to non‑empty string to require that code to show the app.  If empty, no password gate.
+       */
+      const PASSCODE = ""; // e.g. "mysecret"; leave blank for no password gate
+      // Save keys for localStorage
+      const STORAGE_LIST_KEY = 'movies.playlist';
+      const STORAGE_INDEX_KEY = 'movies.index';
+
+      // Discord SDK initialisation
+      const dcStatus = document.getElementById('dcStatus');
+      const client = new window.DiscordSDK.Client({ transportOrigin: window.location.origin });
+      client.ready()
+        .then(() => { dcStatus.textContent = 'connected'; })
+        .catch(() => { dcStatus.textContent = 'standalone'; });
+
+      // DOM elements
+      const contentDiv = document.getElementById('content');
+      const overlay = document.getElementById('passOverlay');
+      const passInput = document.getElementById('passInput');
+      const player = document.getElementById('player');
+      const urlInput = document.getElementById('urlInput');
+      const playlistEl = document.getElementById('playlist');
+
+      let playlist = [];
+      let idx = 0;
+      let hlsInstance;
+
+      // Utility: Save playlist and index to localStorage
+      function saveState() {
+        localStorage.setItem(STORAGE_LIST_KEY, JSON.stringify(playlist));
+        localStorage.setItem(STORAGE_INDEX_KEY, String(idx));
+      }
+
+      // Utility: Render the playlist list
+      function renderList() {
+        playlistEl.innerHTML = '';
+        playlist.forEach((u, i) => {
+          const row = document.createElement('div');
+          row.className = 'item';
+          const span = document.createElement('span');
+          span.textContent = u;
+          const right = document.createElement('div');
+          const playBtn = document.createElement('button');
+          playBtn.textContent = (i === idx ? '▶️ Playing' : '▶️');
+          playBtn.onclick = () => { idx = i; saveState(); loadAndPlay(); renderList(); };
+          const del = document.createElement('button');
+          del.textContent = '🗑';
+          del.onclick = () => {
+            playlist.splice(i, 1);
+            if (idx >= playlist.length) idx = Math.max(0, playlist.length - 1);
+            saveState();
+            renderList();
+          };
+          right.appendChild(playBtn);
+          right.appendChild(del);
+          row.appendChild(span);
+          row.appendChild(right);
+          playlistEl.appendChild(row);
+        });
+      }
+
+      // Determine if URL is an HLS stream
+      function isHls(u) { return /\.m3u8(\?|$)/i.test(u); }
+
+      // Load current item and start playing
+      function loadAndPlay() {
+        if (!playlist.length) return;
+        const url = playlist[idx];
+        // Clean up previous HLS instance
+        if (hlsInstance) {
+          hlsInstance.destroy();
+          hlsInstance = null;
+        }
+        if (isHls(url) && window.Hls && window.Hls.isSupported()) {
+          hlsInstance = new Hls({ lowLatencyMode: true });
+          hlsInstance.loadSource(url);
+          hlsInstance.attachMedia(player);
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => { player.play().catch(() => {}); });
+        } else {
+          // Direct file (.mp4 etc.) — relies on browser codecs/CORS
+          player.src = url;
+          player.play().catch(() => {});
+        }
+      }
+
+      // Previous and next controls
+      function prev() {
+        if (!playlist.length) return;
+        idx = (idx - 1 + playlist.length) % playlist.length;
+        saveState();
+        loadAndPlay();
+        renderList();
+      }
+      function next() {
+        if (!playlist.length) return;
+        idx = (idx + 1) % playlist.length;
+        saveState();
+        loadAndPlay();
+        renderList();
+      }
+
+      // Bind button actions
+      document.getElementById('prevBtn').onclick = prev;
+      document.getElementById('playBtn').onclick = () => player.play().catch(() => {});
+      document.getElementById('pauseBtn').onclick = () => player.pause();
+      document.getElementById('nextBtn').onclick = next;
+
+      document.getElementById('addBtn').onclick = () => {
+        const u = urlInput.value.trim();
+        if (!u) return;
+        playlist.push(u);
+        idx = playlist.length - 1;
+        urlInput.value = '';
+        saveState();
+        renderList();
+        loadAndPlay();
+      };
+      document.getElementById('clearBtn').onclick = () => {
+        if (!confirm('Clear playlist?')) return;
+        playlist = [];
+        idx = 0;
+        saveState();
+        renderList();
+        player.removeAttribute('src');
+        player.load();
+      };
+
+      // Keyboard shortcuts
+      window.addEventListener('keydown', (e) => {
+        // Spacebar toggles play/pause
+        if (e.code === 'Space') {
+          e.preventDefault();
+          if (player.paused) player.play().catch(() => {});
+          else player.pause();
+        } else if (e.code === 'ArrowLeft') {
+          e.preventDefault();
+          prev();
+        } else if (e.code === 'ArrowRight') {
+          e.preventDefault();
+          next();
+        } else if (e.code === 'ArrowUp') {
+          e.preventDefault();
+          player.volume = Math.min(1, player.volume + 0.1);
+        } else if (e.code === 'ArrowDown') {
+          e.preventDefault();
+          player.volume = Math.max(0, player.volume - 0.1);
+        }
+      });
+
+      // Load playlist from movies.txt if available
+      async function tryLoadPlaylistFile() {
+        try {
+          const resp = await fetch('movies.txt');
+          if (!resp.ok) return false;
+          const text = await resp.text();
+          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+          if (lines.length) {
+            playlist = lines;
+            idx = 0;
+            saveState();
+            renderList();
+            loadAndPlay();
+            return true;
+          }
+        } catch (err) {
+          /* no-op: fallback to localStorage */
+        }
+        return false;
+      }
+
+      // Load state from storage
+      function loadFromStorage() {
+        try {
+          const ls = localStorage.getItem(STORAGE_LIST_KEY);
+          const li = localStorage.getItem(STORAGE_INDEX_KEY);
+          if (ls) playlist = JSON.parse(ls);
+          if (li) idx = parseInt(li, 10) || 0;
+        } catch (err) {
+          playlist = [];
+          idx = 0;
+        }
+      }
+
+      // Initialise the application after passcode accepted
+      async function initApp() {
+        overlay.style.display = 'none';
+        contentDiv.style.display = 'block';
+        // Load playlist: first attempt movies.txt, then localStorage
+        const loaded = await tryLoadPlaylistFile();
+        if (!loaded) {
+          loadFromStorage();
+          renderList();
+          if (playlist.length) loadAndPlay();
+        }
+      }
+
+      // Handle passcode overlay
+      function checkPass() {
+        if (!PASSCODE) {
+          initApp();
+        } else {
+          overlay.style.display = 'flex';
+          passInput.focus();
+          passInput.onkeypress = (e) => {
+            if (e.key === 'Enter') {
+              if (passInput.value === PASSCODE) {
+                initApp();
+              } else {
+                alert('Incorrect passcode');
+                passInput.value = '';
+              }
+            }
+          };
+        }
+      }
+
+      // Start after DOM loaded
+      document.addEventListener('DOMContentLoaded', checkPass);
+    })();
+  </script>
+</body>
+</html>
