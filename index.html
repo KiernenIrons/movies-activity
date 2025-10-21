@@ -224,11 +224,18 @@
 
   <!-- Passcode overlay (can be removed by setting PASSCODE empty) -->
  <div class="overlay" id="passOverlay" style="display:none;">
+
+
     <div class="message">Enter passcode to access your cinema</div>
     <input type="password" id="passInput" autocomplete="off" />
   </div>
 
   <script>
+      const overlayEl = document.getElementById('passOverlay') || document.getElementById('passoverlay');
+if (overlayEl) overlayEl.style.display = 'none';
+const contentEl = document.getElementById('content');
+if (contentEl) contentEl.style.display = 'block';
+
     (() => {
       /**
        * Configuration constants.
